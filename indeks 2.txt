@@ -1,0 +1,233 @@
+import React, { useRef, useState, useMemo } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls, Html } from "@react-three/drei";
+
+// --- Data: orbital parameters (simplified & realistic-ish) ---
+// semiMajorAU: semi-major axis in astronomical units
+// periodDays: orbital period in Earth days
+// eccentricity: orbital eccentricity
+// inclinationDeg: inclination in degrees
+const PLANETS = [
+  { name: "Mercurius", color: "#bdb6a6", radiusKm: 2440, semiMajorAU: 0.387, periodDays: 87.97, eccentricity: 0.2056, inclinationDeg: 7.0 },
+  { name: "Venus", color: "#e0c28b", radiusKm: 6052, semiMajorAU: 0.723, periodDays: 224.70, eccentricity: 0.0068, inclinationDeg: 3.4 },
+  { name: "Bumi", color: "#4ca3ff", radiusKm: 6371, semiMajorAU: 1.0, periodDays: 365.25, eccentricity: 0.0167, inclinationDeg: 0.0 },
+  { name: "Mars", color: "#d65a3b", radiusKm: 3390, semiMajorAU: 1.524, periodDays: 686.98, eccentricity: 0.0934, inclinationDeg: 1.85 },
+  { name: "Jupiter", color: "#d9b17c", radiusKm: 69911, semiMajorAU: 5.203, periodDays: 4332.59, eccentricity: 0.0489, inclinationDeg: 1.31 },
+  { name: "Saturnus", color: "#e9d4b8", radiusKm: 58232, semiMajorAU: 9.537, periodDays: 10759.22, eccentricity: 0.0565, inclinationDeg: 2.49 },
+  { name: "Uranus", color: "#a7d6e6", radiusKm: 25362, semiMajorAU: 19.191, periodDays: 30685.4, eccentricity: 0.046381, inclinationDeg: 0.77 },
+  { name: "Neptunus", color: "#3b6fb1", radiusKm: 24622, semiMajorAU: 30.07, periodDays: 60190.03, eccentricity: 0.0086, inclinationDeg: 1.77 },
+];
+
+// --- Utility: scale down real distances and sizes to scene units ---
+const AU = 1; // We'll treat 1 unit = 1 AU in the scene, then apply extra visual scaling
+const DISTANCE_SCALE = 6; // compress distances so orbits fit the view
+const PLANET_SIZE_SCALE = 0.00025; // exaggerate sizes so planets are visible
+
+function useTime(simSpeed, isPlaying) {
+  // returns a time variable in days that increments each frame
+  const ref = useRef({ t: 0 });
+  useFrame((state, delta) => {
+    if (isPlaying) ref.current.t += delta * simSpeed * 60; // delta in seconds -> scale to days
+  });
+  return ref;
+}
+
+function Planet({ planet, timeRef, showLabels }) {
+  const ref = useRef();
+  const { camera } = useThree();
+
+  // precompute orbital constants
+  const a = planet.semiMajorAU * DISTANCE_SCALE; // scaled semi-major axis
+  const e = planet.eccentricity;
+  const b = a * Math.sqrt(1 - e * e); // semi-minor axis
+  const inclination = (planet.inclinationDeg * Math.PI) / 180;
+
+  useFrame(() => {
+    const t = timeRef.current.t; // in days
+    // Mean motion n = 2π / period
+    const n = (2 * Math.PI) / planet.periodDays;
+    const M = n * t; // mean anomaly
+
+    // For a simple but not-fully-accurate approach, parametric ellipse by mean anomaly approx
+    // Use true anomaly approx by solving Kepler's equation would be more accurate; here we use parametric angle = M
+    const theta = M; // radians
+
+    // parametric ellipse (x,y) before inclination
+    const x = a * (Math.cos(theta) - e);
+    const y = b * Math.sin(theta);
+
+    // apply orbital inclination by rotating around x-axis
+    const z = y * Math.sin(inclination);
+    const y2 = y * Math.cos(inclination);
+
+    ref.current.position.set(x, y2, z);
+
+    // slow rotation to hint planet spin
+    ref.current.rotation.y += 0.001 * (1 + planet.radiusKm / 10000);
+  });
+
+  const size = Math.max(planet.radiusKm * PLANET_SIZE_SCALE, 0.08);
+
+  return (
+    <group>
+      <mesh ref={ref}>
+        <sphereGeometry args={[size, 32, 32]} />
+        <meshStandardMaterial color={planet.color} metalness={0.1} roughness={0.7} />
+      </mesh>
+      {showLabels && (
+        <Html distanceFactor={10} position={[0, size + 0.12, 0]} center>
+          <div className="bg-black/60 text-white text-xs rounded px-2 py-1 whitespace-nowrap">{planet.name}</div>
+        </Html>
+      )}
+    </group>
+  );
+}
+
+function Orbits({ planets, showOrbits }) {
+  // draws simple elliptical orbit lines
+  if (!showOrbits) return null;
+  return (
+    <group>
+      {planets.map((p, idx) => {
+        const a = p.semiMajorAU * DISTANCE_SCALE;
+        const e = p.eccentricity;
+        const b = a * Math.sqrt(1 - e * e);
+        const inclination = (p.inclinationDeg * Math.PI) / 180;
+
+        const points = [];
+        const segments = 180;
+        for (let i = 0; i <= segments; i++) {
+          const theta = (i / segments) * Math.PI * 2;
+          const x = a * (Math.cos(theta) - e);
+          const y = b * Math.sin(theta);
+          const z = y * Math.sin(inclination);
+          const y2 = y * Math.cos(inclination);
+          points.push([x, y2, z]);
+        }
+
+        return (
+          <line key={p.name + idx}>
+            <bufferGeometry attach="geometry">
+              <bufferAttribute
+                attachObject={"attributes-position"}
+                array={new Float32Array(points.flat())}
+                count={points.length}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial attach="material" linewidth={1} color={"#888"} transparent opacity={0.6} />
+          </line>
+        );
+      })}
+    </group>
+  );
+}
+
+export default function LintasanTataSurya() {
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [simSpeed, setSimSpeed] = useState(1); // 1x => 60 days/sec as implemented
+  const [showOrbits, setShowOrbits] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+  const [view3D, setView3D] = useState(true);
+  const timeRef = useTime(simSpeed, isPlaying);
+
+  // precompute bright Sun mesh
+  const Sun = (
+    <mesh position={[0, 0, 0]}>
+      <sphereGeometry args={[0.6, 32, 32]} />
+      <meshBasicMaterial toneMapped={false} color={"#ffd86b"} />
+    </mesh>
+  );
+
+  const info = (
+    <div className="p-3 bg-white/90 rounded shadow max-w-xs">
+      <h3 className="font-semibold">Lintasan Tata Surya</h3>
+      <p className="text-xs text-gray-700">Mode: {view3D ? "3D" : "2D"} · Kecepatan: {simSpeed}× · {isPlaying ? "Berjalan" : "Pause"}</p>
+      <hr className="my-2" />
+      <div className="text-xs">
+        <strong>Kontrol:</strong>
+        <ul className="list-disc ml-4">
+          <li>Play / Pause</li>
+          <li>Slider kecepatan untuk percepat/melambat waktu</li>
+          <li>Toggle orbit untuk menampilkan garis orbit</li>
+          <li>Toggle label planet</li>
+          <li>Orbit camera interaktif (pan/zoom/putar)</li>
+        </ul>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-sky-900 to-black text-white p-6">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="col-span-1 lg:col-span-3 rounded-lg overflow-hidden shadow-lg bg-black/40">
+          <div className="h-[72vh] w-full">
+            <Canvas camera={{ position: [0, 6, 12], fov: 45 }}>
+              <ambientLight intensity={0.25} />
+              <pointLight intensity={1.2} color={'#fff3d6'} position={[0, 0, 0]} />
+
+              {/* Sun */}
+              {Sun}
+
+              {/* Orbits */}
+              <Orbits planets={PLANETS} showOrbits={showOrbits} />
+
+              {/* Planets */}
+              {PLANETS.map((p) => (
+                <Planet key={p.name} planet={p} timeRef={timeRef} showLabels={showLabels} />
+              ))}
+
+              {/* camera controls */}
+              <OrbitControls enablePan={true} enableZoom={true} enableRotate={view3D} />
+            </Canvas>
+          </div>
+        </div>
+
+        <div className="col-span-1 flex flex-col gap-4">
+          <div className="p-4 bg-white/5 rounded-lg shadow">
+            <h2 className="text-xl font-bold">Lintasan Tata Surya</h2>
+            <p className="text-sm text-gray-200 mt-2">Simulasi realistis (disederhanakan) orbit planet-planet besar dalam tata surya. Data orbital diambil dari nilai rata-rata (semi-major axis, periode, eksentrisitas, inklinasi).</p>
+          </div>
+
+          <div className="p-4 bg-white/5 rounded-lg shadow flex flex-col gap-3">
+            <div className="flex gap-2 items-center">
+              <button onClick={() => setIsPlaying((s) => !s)} className="px-3 py-2 bg-sky-600 rounded">{isPlaying ? 'Pause' : 'Play'}</button>
+              <button onClick={() => setSimSpeed(1)} className="px-3 py-2 bg-sky-700 rounded">Reset Speed</button>
+              <button onClick={() => setView3D((v) => !v)} className="px-3 py-2 bg-sky-700 rounded">Toggle 2D/3D</button>
+            </div>
+
+            <div>
+              <label className="text-xs block">Kecepatan simulasi: {simSpeed}×</label>
+              <input type="range" min="0.1" max="50" step="0.1" value={simSpeed} onChange={(e) => setSimSpeed(parseFloat(e.target.value))} />
+            </div>
+
+            <div className="flex gap-2">
+              <label className="flex items-center gap-2"><input type="checkbox" checked={showOrbits} onChange={(e) => setShowOrbits(e.target.checked)} /> Tampilkan Orbit</label>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} /> Tampilkan Label</label>
+            </div>
+
+            <div className="mt-2">{info}</div>
+          </div>
+
+          <div className="p-4 bg-white/5 rounded-lg shadow overflow-auto max-h-[30vh]">
+            <h3 className="font-semibold">Data Planet (ringkasan)</h3>
+            <ul className="text-sm mt-2 space-y-2">
+              {PLANETS.map((p) => (
+                <li key={p.name} className="flex justify-between">
+                  <div>
+                    <strong>{p.name}</strong> <span className="text-xs text-gray-300">(a={p.semiMajorAU} AU, T={p.periodDays} hari)</span>
+                  </div>
+                  <div className="text-xs text-gray-200">e={p.eccentricity}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="p-3 text-xs text-gray-300">
+            <strong>Catatan:</strong> Simulasi ini menyederhanakan perhitungan orbit (tidak memecahkan persamaan Kepler secara iteratif) namun memberikan visual yang realistis untuk pembelajaran. Untuk akurasi tinggi, Anda dapat mengganti solver anomali (Kepler) pada komponen Planet.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
